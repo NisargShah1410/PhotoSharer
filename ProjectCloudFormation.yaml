@@ -1,0 +1,2942 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Term Project CloudFormation script"
+Resources:
+    AuthenticateUserCloudLambdaFunction:
+        Type: "AWS::Lambda::Function"
+        Properties:
+            Description: "Authenticate User Cloud Lambda Function"
+            FunctionName: "authenticateUserCloud"
+            Handler: "index.lambda_handler"
+            MemorySize: 128
+            Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
+            Runtime: "python3.10"
+            Timeout: 3
+            TracingConfig:
+                Mode: "PassThrough"
+            Code:
+                ZipFile: |
+                    import boto3
+                    import json
+                    import uuid
+                    import hashlib
+
+                    dynamodb = boto3.resource('dynamodb')
+                    table_name = 'usersCloud'
+
+                    #Code to authenticate user from details stored in DynamoDB database
+                    def lambda_handler(event, context):
+                        try:
+                            # Get user credentials from the event (e.g., email, password)
+                            data = json.loads(event['body'])
+                            email = data['email']
+                            password = data['password']
+
+                            # Retrieve user details from DynamoDB
+                            table = dynamodb.Table(table_name)
+                            response = table.scan(FilterExpression=boto3.dynamodb.conditions.Attr('email').eq(email))
+                            user = response['Items'][0] if response['Items'] else None
+
+                            if not user:
+                                return {
+                                    'statusCode': 401,
+                                    'body': 'No use found with this email.',
+                                    'headers': {
+                                        'Access-Control-Allow-Origin': '*',  # You may restrict this to specific domains
+                                        'Access-Control-Allow-Headers': 'Content-Type',
+                                        'Access-Control-Allow-Methods': 'POST',
+                                    },
+                                }
+
+                            # Hash the provided password using SHA-256 and compare with the stored hashed password
+                            hashed_password = hashlib.sha256(password.encode()).hexdigest()
+                            if hashed_password == user['password']:
+                                return {
+                                    'statusCode': 200,
+                                    'body': json.dumps({'message': 'User authenticated successfully!', 'user_id': user['user_id']}),
+                                    'headers': {
+                                        'Access-Control-Allow-Origin': '*',  # You may restrict this to specific domains
+                                        'Access-Control-Allow-Headers': 'Content-Type',
+                                        'Access-Control-Allow-Methods': 'POST',
+                                    },
+                                }
+                            else:
+                                return {
+                                    'statusCode': 402,
+                                    'body': 'Invalid credentials. Authentication failed.',
+                                    'headers': {
+                                        'Access-Control-Allow-Origin': '*',  # You may restrict this to specific domains
+                                        'Access-Control-Allow-Headers': 'Content-Type',
+                                        'Access-Control-Allow-Methods': 'POST',
+                                    },
+                                }
+
+                        except Exception as e:
+                            # Return error response if any exception occurs
+                            return {
+                                'statusCode': 500,
+                                'body': str(e),
+                                'headers': {
+                                    'Access-Control-Allow-Origin': '*',  # You may restrict this to specific domains
+                                    'Access-Control-Allow-Headers': 'Content-Type',
+                                    'Access-Control-Allow-Methods': 'POST',
+                                },
+                            }
+
+
+    authenticateApiGateway:
+      Type: AWS::ApiGateway::RestApi
+      Properties:
+        Name: authenticate
+        Description: "authenticate users"
+        EndpointConfiguration: 
+          Types: 
+            - "REGIONAL"
+
+    AuthenticateUserCloudLambdaFunctionPermission:
+      Type: "AWS::Lambda::Permission"
+      Properties:
+        FunctionName: !Ref AuthenticateUserCloudLambdaFunction
+        Action: "lambda:InvokeFunction"
+        Principal: "apigateway.amazonaws.com"
+        SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${authenticateApiGateway}/*"
+
+
+    authenticateOptionsMethod:
+      Type: AWS::ApiGateway::Method
+      Properties:
+        AuthorizationType: NONE
+        RestApiId: !Ref authenticateApiGateway
+        ResourceId: !GetAtt authenticateApiGateway.RootResourceId
+        HttpMethod: OPTIONS
+        ApiKeyRequired: false
+        RequestParameters: {}
+        Integration:
+          CacheNamespace: !GetAtt authenticateApiGateway.RootResourceId
+          IntegrationResponses:
+            - 
+              
+              ResponseParameters:
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,POST'"
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              StatusCode: 200
+              ResponseTemplates:
+                "application/json": ""
+          PassthroughBehavior: WHEN_NO_MATCH
+          RequestTemplates:
+            "application/json": '{"statusCode": 200}'
+          Type: MOCK
+        MethodResponses:
+          - 
+            ResponseModels:
+              "application/json": "Empty"
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": true
+              "method.response.header.Access-Control-Allow-Methods": true
+              "method.response.header.Access-Control-Allow-Origin": true
+            StatusCode: "200"
+            
+
+    authenticatePostMethod:
+      Type: "AWS::ApiGateway::Method"
+      Properties:
+        RestApiId: !Ref authenticateApiGateway
+        ResourceId: !GetAtt authenticateApiGateway.RootResourceId
+        AuthorizationType: NONE
+        HttpMethod: POST
+        ApiKeyRequired: false
+        RequestParameters: {}
+        Integration:
+          CacheNamespace: !GetAtt authenticateApiGateway.RootResourceId
+          ContentHandling: "CONVERT_TO_TEXT"
+          IntegrationHttpMethod: POST
+          PassthroughBehavior: "WHEN_NO_MATCH"
+          Type: "AWS_PROXY"
+          Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AuthenticateUserCloudLambdaFunction.Arn}/invocations"
+          IntegrationResponses:
+            - 
+              ResponseParameters:
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,POST'"
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              StatusCode: "200"
+        MethodResponses:
+          - 
+            ResponseModels: 
+              "application/json": "Empty"
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": true
+              "method.response.header.Access-Control-Allow-Methods": true
+              "method.response.header.Access-Control-Allow-Origin": true
+            StatusCode: "200"
+
+    authenticateApiDeployment:
+      Type: AWS::ApiGateway::Deployment
+      DependsOn:
+        - authenticatePostMethod
+      Properties:
+        RestApiId: !Ref authenticateApiGateway
+
+
+    authenticateApiStage:
+      Type: AWS::ApiGateway::Stage
+      Properties:
+        RestApiId: !Ref authenticateApiGateway
+        DeploymentId: !Ref authenticateApiDeployment
+        StageName: authenticate
+        Description: Production Stage
+
+    StoreGroupCloudFunction:
+        Type: "AWS::Lambda::Function"
+        Properties:
+            Description: "Lambda function to store group data to DynamoDB"
+            FunctionName: "storeGroupCloud"
+            Handler: index.lambda_handler
+            Architectures: 
+              - "x86_64"
+            MemorySize: 128
+            Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
+            Runtime: "python3.10"
+            Timeout: 3
+            TracingConfig: 
+                Mode: "PassThrough"
+            EphemeralStorage: 
+                Size: 512
+            Code:
+                ZipFile: |
+                    import json
+                    import boto3
+
+                    dynamodb = boto3.resource('dynamodb', region_name='us-east-1')
+                    table_name = 'groupsCloud'
+                    storeGroup = dynamodb.Table(table_name)
+
+                    def lambda_handler(event, context):
+                        response = store_group(json.loads(event['body']))
+                        return response
+
+
+                    def store_group(request_body):
+                        try:
+                            storeGroup.put_item(Item=request_body)
+                            body = {
+                                'Operation': 'Store',
+                                'Message': 'Success',
+                                'Item': request_body
+                            }
+                            return build_response(200, body)
+                        except Exception as e:
+                            print(e)
+                            return build_response(500, {'Message': 'Error storing team data.'})
+
+
+                    def build_response(status_code, body):
+                        return {
+                            'statusCode': status_code,
+                            'body': json.dumps(body),
+                            'headers': {
+                                'Access-Control-Allow-Origin': '*',  # You may restrict this to specific domains
+                                'Access-Control-Allow-Headers': 'Content-Type',
+                                'Access-Control-Allow-Methods': 'POST',
+                            },
+                        }
+
+
+    createApiGateway:
+      Type: AWS::ApiGateway::RestApi
+      Properties:
+        Name: create
+        Description: "create users"
+        EndpointConfiguration: 
+          Types: 
+            - "REGIONAL"
+
+    StoreGroupCloudFunctionPermission:
+      Type: "AWS::Lambda::Permission"
+      Properties:
+        FunctionName: !Ref StoreGroupCloudFunction
+        Action: "lambda:InvokeFunction"
+        Principal: "apigateway.amazonaws.com"
+        SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${createApiGateway}/*"
+
+
+    createOptionsMethod:
+      Type: AWS::ApiGateway::Method
+      Properties:
+        AuthorizationType: NONE
+        RestApiId: !Ref createApiGateway
+        ResourceId: !GetAtt createApiGateway.RootResourceId
+        HttpMethod: OPTIONS
+        ApiKeyRequired: false
+        RequestParameters: {}
+        Integration:
+          CacheNamespace: !GetAtt createApiGateway.RootResourceId
+          IntegrationResponses:
+            - 
+              
+              ResponseParameters:
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,POST'"
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              StatusCode: 200
+              ResponseTemplates:
+                "application/json": ""
+          PassthroughBehavior: WHEN_NO_MATCH
+          RequestTemplates:
+            "application/json": '{"statusCode": 200}'
+          Type: MOCK
+        MethodResponses:
+          - 
+            ResponseModels:
+              "application/json": "Empty"
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": true
+              "method.response.header.Access-Control-Allow-Methods": true
+              "method.response.header.Access-Control-Allow-Origin": true
+            StatusCode: "200"
+            
+
+    createPostMethod:
+      Type: "AWS::ApiGateway::Method"
+      Properties:
+        RestApiId: !Ref createApiGateway
+        ResourceId: !GetAtt createApiGateway.RootResourceId
+        AuthorizationType: NONE
+        HttpMethod: POST
+        ApiKeyRequired: false
+        RequestParameters: {}
+        Integration:
+          CacheNamespace: !GetAtt createApiGateway.RootResourceId
+          ContentHandling: "CONVERT_TO_TEXT"
+          IntegrationHttpMethod: POST
+          PassthroughBehavior: "WHEN_NO_MATCH"
+          Type: "AWS_PROXY"
+          Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${StoreGroupCloudFunction.Arn}/invocations"
+          IntegrationResponses:
+            - 
+              ResponseParameters:
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,POST'"
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              StatusCode: "200"
+        MethodResponses:
+          - 
+            ResponseModels: 
+              "application/json": "Empty"
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": true
+              "method.response.header.Access-Control-Allow-Methods": true
+              "method.response.header.Access-Control-Allow-Origin": true
+            StatusCode: "200"
+
+    createApiDeployment:
+      Type: AWS::ApiGateway::Deployment
+      DependsOn:
+        - createPostMethod
+      Properties:
+        RestApiId: !Ref createApiGateway
+
+
+    createApiStage:
+      Type: AWS::ApiGateway::Stage
+      Properties:
+        RestApiId: !Ref createApiGateway
+        DeploymentId: !Ref createApiDeployment
+        StageName: create
+        Description: Production Stage
+
+    GetGroupCloudLambdaFunction:
+        Type: "AWS::Lambda::Function"
+        Properties:
+            Description: "Get Group Cloud Lambda Function"
+            FunctionName: "getGroupCloud"
+            Handler: "index.lambda_handler"
+            MemorySize: 128
+            Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
+            Runtime: "python3.10"
+            Timeout: 3
+            TracingConfig:
+                Mode: "PassThrough"
+            Code:
+                ZipFile: |
+                    import json
+                    import boto3
+                    from decimal import Decimal
+
+                    dynamodb = boto3.resource('dynamodb')
+                    table_name = 'groupsCloud'
+
+                    def list_items(groupid):
+                        table = dynamodb.Table(table_name)
+                        params = {
+                            'TableName': table_name,
+                            'KeyConditionExpression': 'group_id = :groupIdValue',
+                            'ExpressionAttributeValues': {
+                                ':groupIdValue': groupid,
+                            }
+                        }
+
+                        try:
+                            response = table.query(**params)
+                            print(response)
+                            items = response['Items']
+
+                            # Convert 'Decimal' objects to regular integers or floats
+                            for item in items:
+                                for key, value in item.items():
+                                    if isinstance(value, Decimal):
+                                        if value % 1 == 0:
+                                            item[key] = int(value)
+                                        else:
+                                            item[key] = float(value)
+
+                            return items
+                        except Exception as e:
+                            return str(e)
+
+                    def lambda_handler(event, context):
+                        print(event['body'])
+                        data = json.loads(event["body"])
+                        print(data)
+                        groupid = data["id"]
+                        print(groupid)
+
+                        try:
+                            data = list_items(groupid)
+                            print(data)
+                            return {
+                                'statusCode': 200,
+                                'body': json.dumps(data),
+                                'headers': {
+                                    'Access-Control-Allow-Origin': '*',  # You may restrict this to specific domains
+                                    'Access-Control-Allow-Headers': 'Content-Type',
+                                    'Access-Control-Allow-Methods': 'POST',
+                                },
+                            }
+                        except Exception as e:
+                            return  {
+                                'statusCode': 500,
+                                'body': json.dumps(data),
+                                'headers': {
+                                    'Access-Control-Allow-Origin': '*',  # You may restrict this to specific domains
+                                    'Access-Control-Allow-Headers': 'Content-Type',
+                                    'Access-Control-Allow-Methods': 'POST',
+                                },
+                            }
+
+
+
+
+    getGroupApiGateway:
+      Type: AWS::ApiGateway::RestApi
+      Properties:
+        Name: getgroup
+        Description: "get group"
+        EndpointConfiguration: 
+          Types: 
+            - "REGIONAL"
+
+    GetGroupCloudLambdaFunctionPermission:
+      Type: "AWS::Lambda::Permission"
+      Properties:
+        FunctionName: !Ref GetGroupCloudLambdaFunction
+        Action: "lambda:InvokeFunction"
+        Principal: "apigateway.amazonaws.com"
+        SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${getGroupApiGateway}/*"
+
+
+    getgroupOptionsMethod:
+      Type: AWS::ApiGateway::Method
+      Properties:
+        AuthorizationType: NONE
+        RestApiId: !Ref getGroupApiGateway
+        ResourceId: !GetAtt getGroupApiGateway.RootResourceId
+        HttpMethod: OPTIONS
+        ApiKeyRequired: false
+        RequestParameters: {}
+        Integration:
+          CacheNamespace: !GetAtt getGroupApiGateway.RootResourceId
+          IntegrationResponses:
+            - 
+              
+              ResponseParameters:
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,POST'"
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              StatusCode: 200
+              ResponseTemplates:
+                "application/json": ""
+          PassthroughBehavior: WHEN_NO_MATCH
+          RequestTemplates:
+            "application/json": '{"statusCode": 200}'
+          Type: MOCK
+        MethodResponses:
+          - 
+            ResponseModels:
+              "application/json": "Empty"
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": true
+              "method.response.header.Access-Control-Allow-Methods": true
+              "method.response.header.Access-Control-Allow-Origin": true
+            StatusCode: "200"
+            
+
+    getgroupPostMethod:
+      Type: "AWS::ApiGateway::Method"
+      Properties:
+        RestApiId: !Ref getGroupApiGateway
+        ResourceId: !GetAtt getGroupApiGateway.RootResourceId
+        AuthorizationType: NONE
+        HttpMethod: POST
+        ApiKeyRequired: false
+        RequestParameters: {}
+        Integration:
+          CacheNamespace: !GetAtt getGroupApiGateway.RootResourceId
+          ContentHandling: "CONVERT_TO_TEXT"
+          IntegrationHttpMethod: POST
+          PassthroughBehavior: "WHEN_NO_MATCH"
+          Type: "AWS_PROXY"
+          Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetGroupCloudLambdaFunction.Arn}/invocations"
+          IntegrationResponses:
+            - 
+              ResponseParameters:
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,POST'"
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              StatusCode: "200"
+        MethodResponses:
+          - 
+            ResponseModels: 
+              "application/json": "Empty"
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": true
+              "method.response.header.Access-Control-Allow-Methods": true
+              "method.response.header.Access-Control-Allow-Origin": true
+            StatusCode: "200"
+
+    getgroupApiDeployment:
+      Type: AWS::ApiGateway::Deployment
+      DependsOn:
+        - getgroupPostMethod
+      Properties:
+        RestApiId: !Ref getGroupApiGateway
+
+
+    getgroupApiStage:
+      Type: AWS::ApiGateway::Stage
+      Properties:
+        RestApiId: !Ref getGroupApiGateway
+        DeploymentId: !Ref getgroupApiDeployment
+        StageName: getgroup
+        Description: Production Stage
+
+    GetAllimageCloudFunction:
+        Type: "AWS::Lambda::Function"
+        Properties:
+            Description: "Lambda function to get all images from DynamoDB"
+            FunctionName: "getAllimageCloud"
+            Handler: index.lambda_handler
+            Architectures: 
+              - "x86_64"
+            MemorySize: 128
+            Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
+            Runtime: "python3.10"
+            Timeout: 3
+            TracingConfig: 
+                Mode: "PassThrough"
+            EphemeralStorage: 
+                Size: 512
+            Code:
+                ZipFile: |
+                    import boto3
+                    import json
+                    from decimal import Decimal
+
+                    def lambda_handler(event, context):
+                        print(event['body'])
+                        request_body = json.loads(event['body'])
+                        group_id = request_body['group_id']
+                        print(group_id)
+
+                        if not group_id:
+                            return {
+                                'statusCode': 400,
+                                'body': json.dumps('Missing group_id parameter in the request.'),
+                                'headers': {
+                                        'Access-Control-Allow-Origin': '*',  # You may restrict this to specific domains
+                                        'Access-Control-Allow-Headers': 'Content-Type',
+                                        'Access-Control-Allow-Methods': 'POST',
+                                    },
+                            }
+
+                        dynamodb = boto3.resource('dynamodb')
+                        table = dynamodb.Table('imageCloud')
+
+                        response = table.scan(
+                            FilterExpression=boto3.dynamodb.conditions.Attr('group_id').eq(group_id)
+                        )
+
+                        items = response['Items']
+                        print(items)
+
+                        for item in items:
+                            for key, value in item.items():
+                                if isinstance(value, Decimal):
+                                    if value % 1 == 0:
+                                        item[key] = int(value)
+                                    else:
+                                        item[key] = float(value)
+                        print(items)
+
+                        return {
+                            'statusCode': 200,
+                            'body': json.dumps(items),
+                            'headers': {
+                                        'Access-Control-Allow-Origin': '*',  # You may restrict this to specific domains
+                                        'Access-Control-Allow-Headers': 'Content-Type',
+                                        'Access-Control-Allow-Methods': 'POST',
+                                    },
+                        }
+
+
+
+    getImagesApiGateway:
+      Type: AWS::ApiGateway::RestApi
+      Properties:
+        Name: getImages
+        Description: "getImages users"
+        EndpointConfiguration: 
+          Types: 
+            - "REGIONAL"
+
+    GetAllimageCloudFunctionPermission:
+      Type: "AWS::Lambda::Permission"
+      Properties:
+        FunctionName: !Ref GetAllimageCloudFunction
+        Action: "lambda:InvokeFunction"
+        Principal: "apigateway.amazonaws.com"
+        SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${getImagesApiGateway}/*"
+
+
+    getImagesOptionsMethod:
+      Type: AWS::ApiGateway::Method
+      Properties:
+        AuthorizationType: NONE
+        RestApiId: !Ref getImagesApiGateway
+        ResourceId: !GetAtt getImagesApiGateway.RootResourceId
+        HttpMethod: OPTIONS
+        ApiKeyRequired: false
+        RequestParameters: {}
+        Integration:
+          CacheNamespace: !GetAtt getImagesApiGateway.RootResourceId
+          IntegrationResponses:
+            - 
+              
+              ResponseParameters:
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,POST'"
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              StatusCode: 200
+              ResponseTemplates:
+                "application/json": ""
+          PassthroughBehavior: WHEN_NO_MATCH
+          RequestTemplates:
+            "application/json": '{"statusCode": 200}'
+          Type: MOCK
+        MethodResponses:
+          - 
+            ResponseModels:
+              "application/json": "Empty"
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": true
+              "method.response.header.Access-Control-Allow-Methods": true
+              "method.response.header.Access-Control-Allow-Origin": true
+            StatusCode: "200"
+            
+
+    getImagesPostMethod:
+      Type: "AWS::ApiGateway::Method"
+      Properties:
+        RestApiId: !Ref getImagesApiGateway
+        ResourceId: !GetAtt getImagesApiGateway.RootResourceId
+        AuthorizationType: NONE
+        HttpMethod: POST
+        ApiKeyRequired: false
+        RequestParameters: {}
+        Integration:
+          CacheNamespace: !GetAtt getImagesApiGateway.RootResourceId
+          ContentHandling: "CONVERT_TO_TEXT"
+          IntegrationHttpMethod: POST
+          PassthroughBehavior: "WHEN_NO_MATCH"
+          Type: "AWS_PROXY"
+          Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetAllimageCloudFunction.Arn}/invocations"
+          IntegrationResponses:
+            - 
+              ResponseParameters:
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,POST'"
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              StatusCode: "200"
+        MethodResponses:
+          - 
+            ResponseModels: 
+              "application/json": "Empty"
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": true
+              "method.response.header.Access-Control-Allow-Methods": true
+              "method.response.header.Access-Control-Allow-Origin": true
+            StatusCode: "200"
+
+    getimagesApiDeployment:
+      Type: AWS::ApiGateway::Deployment
+      DependsOn:
+        - getImagesPostMethod
+      Properties:
+        RestApiId: !Ref getImagesApiGateway
+
+
+    getimagesApiStage:
+      Type: AWS::ApiGateway::Stage
+      Properties:
+        RestApiId: !Ref getImagesApiGateway
+        DeploymentId: !Ref getimagesApiDeployment
+        StageName: getimages
+        Description: Production Stage
+    GetUserCloudLambdaFunction:
+        Type: "AWS::Lambda::Function"
+        Properties:
+            Description: "Get User Cloud Lambda Function"
+            FunctionName: "getUserCloud"
+            Handler: "index.lambda_handler"
+            MemorySize: 128
+            Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
+            Runtime: "python3.10"
+            Timeout: 3
+            TracingConfig:
+                Mode: "PassThrough"
+            Code:
+                ZipFile: |
+                    import json
+                    import boto3
+                    from decimal import Decimal
+
+                    dynamodb = boto3.resource('dynamodb')
+                    table_name = 'usersCloud'
+
+                    def list_items(uid):
+                        table = dynamodb.Table(table_name)
+                        params = {
+                            'TableName': table_name,
+                            'KeyConditionExpression': 'user_id = :userIdValue',
+                            'ExpressionAttributeValues': {
+                                ':userIdValue': uid,
+                            }
+                        }
+
+                        try:
+                            response = table.query(**params)
+                            print(response)
+                            items = response['Items']
+
+                            # Convert 'Decimal' objects to regular integers or floats
+                            for item in items:
+                                for key, value in item.items():
+                                    if isinstance(value, Decimal):
+                                        if value % 1 == 0:
+                                            item[key] = int(value)
+                                        else:
+                                            item[key] = float(value)
+
+                            return items
+                        except Exception as e:
+                            return str(e)
+
+                    def lambda_handler(event, context):
+                        print(event['body'])
+                        data = json.loads(event["body"])
+                        print(data)
+                        uid = data["id"]
+                        print(uid)
+
+                        try:
+                            data = list_items(uid)
+                            print(data)
+                            return {
+                                'statusCode': 200,
+                                'body': json.dumps(data),
+                                'headers': {
+                                    'Access-Control-Allow-Origin': '*',  # You may restrict this to specific domains
+                                    'Access-Control-Allow-Headers': 'Content-Type',
+                                    'Access-Control-Allow-Methods': 'POST',
+                                },
+                            }
+                        except Exception as e:
+                            return {
+                                'statusCode': 500,
+                                'body': json.dumps(data),
+                                'headers': {
+                                    'Access-Control-Allow-Origin': '*',  # You may restrict this to specific domains
+                                    'Access-Control-Allow-Headers': 'Content-Type',
+                                    'Access-Control-Allow-Methods': 'POST',
+                                },
+                            }
+
+    getUserApiGateway:
+      Type: AWS::ApiGateway::RestApi
+      Properties:
+        Name: getUser
+        Description: "get users"
+        EndpointConfiguration: 
+          Types: 
+            - "REGIONAL"
+
+    GetUserCloudLambdaFunctionPermission:
+      Type: "AWS::Lambda::Permission"
+      Properties:
+        FunctionName: !Ref GetUserCloudLambdaFunction
+        Action: "lambda:InvokeFunction"
+        Principal: "apigateway.amazonaws.com"
+        SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${getUserApiGateway}/*"
+
+
+    getUserOptionsMethod:
+      Type: AWS::ApiGateway::Method
+      Properties:
+        AuthorizationType: NONE
+        RestApiId: !Ref getUserApiGateway
+        ResourceId: !GetAtt getUserApiGateway.RootResourceId
+        HttpMethod: OPTIONS
+        ApiKeyRequired: false
+        RequestParameters: {}
+        Integration:
+          CacheNamespace: !GetAtt getUserApiGateway.RootResourceId
+          IntegrationResponses:
+            - 
+              
+              ResponseParameters:
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,POST'"
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              StatusCode: 200
+              ResponseTemplates:
+                "application/json": ""
+          PassthroughBehavior: WHEN_NO_MATCH
+          RequestTemplates:
+            "application/json": '{"statusCode": 200}'
+          Type: MOCK
+        MethodResponses:
+          - 
+            ResponseModels:
+              "application/json": "Empty"
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": true
+              "method.response.header.Access-Control-Allow-Methods": true
+              "method.response.header.Access-Control-Allow-Origin": true
+            StatusCode: "200"
+            
+
+    getUserPostMethod:
+      Type: "AWS::ApiGateway::Method"
+      Properties:
+        RestApiId: !Ref getUserApiGateway
+        ResourceId: !GetAtt getUserApiGateway.RootResourceId
+        AuthorizationType: NONE
+        HttpMethod: POST
+        ApiKeyRequired: false
+        RequestParameters: {}
+        Integration:
+          CacheNamespace: !GetAtt getUserApiGateway.RootResourceId
+          ContentHandling: "CONVERT_TO_TEXT"
+          IntegrationHttpMethod: POST
+          PassthroughBehavior: "WHEN_NO_MATCH"
+          Type: "AWS_PROXY"
+          Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetUserCloudLambdaFunction.Arn}/invocations"
+          IntegrationResponses:
+            - 
+              ResponseParameters:
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,POST'"
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              StatusCode: "200"
+        MethodResponses:
+          - 
+            ResponseModels: 
+              "application/json": "Empty"
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": true
+              "method.response.header.Access-Control-Allow-Methods": true
+              "method.response.header.Access-Control-Allow-Origin": true
+            StatusCode: "200"
+
+    getuserApiDeployment:
+      Type: AWS::ApiGateway::Deployment
+      DependsOn:
+        - getUserPostMethod
+      Properties:
+        RestApiId: !Ref getUserApiGateway
+
+
+    getuserApiStage:
+      Type: AWS::ApiGateway::Stage
+      Properties:
+        RestApiId: !Ref getUserApiGateway
+        DeploymentId: !Ref getuserApiDeployment
+        StageName: getuser
+        Description: Production Stage
+
+    InviteGroupMemberCloudFunction:
+        Type: "AWS::Lambda::Function"
+        Properties:
+            Description: "Lambda function to handle group member invitation via SQS"
+            FunctionName: "inviteGroupMemberCloud"
+            Handler: index.lambda_handler
+            Architectures: 
+              - "x86_64"
+            MemorySize: 128
+            Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
+            Runtime: "python3.10"
+            Timeout: 3
+            TracingConfig: 
+                Mode: "PassThrough"
+            EphemeralStorage: 
+                Size: 512
+            Environment:
+                Variables:
+                    SNSTopicARN: !Ref SNSTopic
+            Code:
+                ZipFile: !Sub |
+                    import json
+                    import boto3
+                    import os
+
+                    sns = boto3.client('sns', region_name='us-east-1')
+
+                    def lambda_handler(event, context):
+                        print(event['body'])
+                        request_body = json.loads(event['body'])
+                        email = request_body['email']
+                        group_name = request_body['group_name']
+                        group_id = request_body['group_id']
+                        mess = request_body['message']
+                        sns_topic_arn = os.environ['SNSTopicARN']
+                        print(mess)
+                        print(email)
+                        print(group_name)
+                        print(group_id)
+
+                        try:
+                            response = sns.publish(
+                                Message=mess,
+                                TopicArn=sns_topic_arn,
+                                MessageAttributes={
+                                    'email': {
+                                        'DataType': 'String',
+                                        'StringValue': email,
+                                    },
+                                    'group_name': {
+                                        'DataType': 'String',
+                                        'StringValue': group_name,
+                                    },
+                                    'group_id': {
+                                        'DataType': 'String',
+                                        'StringValue': str(group_id),
+                                    },
+                                },
+                            )
+
+                            print('Invitation sent:', response)
+                            return {
+                            'statusCode': 200,
+                            'body': json.dumps(response),
+                            'headers': {
+                                        'Access-Control-Allow-Origin': '*',  # You may restrict this to specific domains
+                                        'Access-Control-Allow-Headers': 'Content-Type',
+                                        'Access-Control-Allow-Methods': 'POST',
+                                    },
+                            }
+                        except Exception as e:
+                            print('Failed to send invitation:', e)
+                            return {
+                            'statusCode': 500,
+                            'body': json.dumps(e),
+                            'headers': {
+                                        'Access-Control-Allow-Origin': '*',  # You may restrict this to specific domains
+                                        'Access-Control-Allow-Headers': 'Content-Type',
+                                        'Access-Control-Allow-Methods': 'POST',
+                                    },
+                            }
+
+
+
+    invitememberApiGateway:
+      Type: AWS::ApiGateway::RestApi
+      Properties:
+        Name: invitemember
+        Description: "invitemember"
+        EndpointConfiguration: 
+          Types: 
+            - "REGIONAL"
+
+    InviteGroupMemberCloudFunctionPermission:
+      Type: "AWS::Lambda::Permission"
+      Properties:
+        FunctionName: !Ref InviteGroupMemberCloudFunction
+        Action: "lambda:InvokeFunction"
+        Principal: "apigateway.amazonaws.com"
+        SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${invitememberApiGateway}/*"
+
+
+    invitememberOptionsMethod:
+      Type: AWS::ApiGateway::Method
+      Properties:
+        AuthorizationType: NONE
+        RestApiId: !Ref invitememberApiGateway
+        ResourceId: !GetAtt invitememberApiGateway.RootResourceId
+        HttpMethod: OPTIONS
+        ApiKeyRequired: false
+        RequestParameters: {}
+        Integration:
+          CacheNamespace: !GetAtt invitememberApiGateway.RootResourceId
+          IntegrationResponses:
+            - 
+              
+              ResponseParameters:
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,POST'"
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              StatusCode: 200
+              ResponseTemplates:
+                "application/json": ""
+          PassthroughBehavior: WHEN_NO_MATCH
+          RequestTemplates:
+            "application/json": '{"statusCode": 200}'
+          Type: MOCK
+        MethodResponses:
+          - 
+            ResponseModels:
+              "application/json": "Empty"
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": true
+              "method.response.header.Access-Control-Allow-Methods": true
+              "method.response.header.Access-Control-Allow-Origin": true
+            StatusCode: "200"
+            
+
+    invitememberPostMethod:
+      Type: "AWS::ApiGateway::Method"
+      Properties:
+        RestApiId: !Ref invitememberApiGateway
+        ResourceId: !GetAtt invitememberApiGateway.RootResourceId
+        AuthorizationType: NONE
+        HttpMethod: POST
+        ApiKeyRequired: false
+        RequestParameters: {}
+        Integration:
+          CacheNamespace: !GetAtt invitememberApiGateway.RootResourceId
+          ContentHandling: "CONVERT_TO_TEXT"
+          IntegrationHttpMethod: POST
+          PassthroughBehavior: "WHEN_NO_MATCH"
+          Type: "AWS_PROXY"
+          Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${InviteGroupMemberCloudFunction.Arn}/invocations"
+          IntegrationResponses:
+            - 
+              ResponseParameters:
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,POST'"
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              StatusCode: "200"
+        MethodResponses:
+          - 
+            ResponseModels: 
+              "application/json": "Empty"
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": true
+              "method.response.header.Access-Control-Allow-Methods": true
+              "method.response.header.Access-Control-Allow-Origin": true
+            StatusCode: "200"
+
+    invitememberApiDeployment:
+      Type: AWS::ApiGateway::Deployment
+      DependsOn:
+        - invitememberPostMethod
+      Properties:
+        RestApiId: !Ref invitememberApiGateway
+
+
+    invitememberApiStage:
+      Type: AWS::ApiGateway::Stage
+      Properties:
+        RestApiId: !Ref invitememberApiGateway
+        DeploymentId: !Ref invitememberApiDeployment
+        StageName: invitemember
+        Description: Production Stage
+
+    ShowInvitesCloudLambdaFunction:
+        Type: "AWS::Lambda::Function"
+        Properties:
+            Description: "Show Invites Cloud Lambda Function"
+            FunctionName: "showInvitesCloud"
+            Handler: "index.lambda_handler"
+            MemorySize: 128
+            Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
+            Runtime: "python3.10"
+            Timeout: 3
+            TracingConfig:
+                Mode: "PassThrough"
+            Code:
+                ZipFile: !Sub |
+                    import boto3
+                    import json
+
+                    sqs = boto3.client('sqs', region_name='us-east-1')
+
+                    def lambda_handler(event, context):
+                        try:
+                            response = sqs.receive_message(
+                                QueueUrl="https://sqs.${AWS::Region}.amazonaws.com/${AWS::AccountId}/${SQSQueue.QueueName}",
+                                MaxNumberOfMessages=10,
+                                WaitTimeSeconds=10,
+                                VisibilityTimeout=0
+                            )
+
+                            messages = response['Messages']
+                            print('Invitation sent:', messages)
+                            return {
+                                'statusCode': 200,
+                                'body': json.dumps(messages),
+                                'headers': {
+                                    'Access-Control-Allow-Origin': '*',  # You may restrict this to specific domains
+                                    'Access-Control-Allow-Headers': 'Content-Type',
+                                    'Access-Control-Allow-Methods': 'POST',
+                                },
+                            }
+                        except Exception as e:
+                            print('Failed to receive messages:', e)
+                            return {
+                                'statusCode': 500,
+                                'body': json.dumps(e),
+                                'headers': {
+                                    'Access-Control-Allow-Origin': '*',  # You may restrict this to specific domains
+                                    'Access-Control-Allow-Headers': 'Content-Type',
+                                    'Access-Control-Allow-Methods': 'POST',
+                                },
+                            }
+
+
+    notificationgetApiGateway:
+      Type: AWS::ApiGateway::RestApi
+      Properties:
+        Name: notificationget
+        Description: "notificationget users"
+        EndpointConfiguration: 
+          Types: 
+            - "REGIONAL"
+
+    ShowInvitesCloudLambdaFunctionPermission:
+      Type: "AWS::Lambda::Permission"
+      Properties:
+        FunctionName: !Ref ShowInvitesCloudLambdaFunction
+        Action: "lambda:InvokeFunction"
+        Principal: "apigateway.amazonaws.com"
+        SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${notificationgetApiGateway}/*"
+
+
+    notificationgetOptionsMethod:
+      Type: AWS::ApiGateway::Method
+      Properties:
+        AuthorizationType: NONE
+        RestApiId: !Ref notificationgetApiGateway
+        ResourceId: !GetAtt notificationgetApiGateway.RootResourceId
+        HttpMethod: OPTIONS
+        ApiKeyRequired: false
+        RequestParameters: {}
+        Integration:
+          CacheNamespace: !GetAtt notificationgetApiGateway.RootResourceId
+          IntegrationResponses:
+            - 
+              
+              ResponseParameters:
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,GET,POST'"
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              StatusCode: 200
+              ResponseTemplates:
+                "application/json": ""
+          PassthroughBehavior: WHEN_NO_MATCH
+          RequestTemplates:
+            "application/json": '{"statusCode": 200}'
+          Type: MOCK
+        MethodResponses:
+          - 
+            ResponseModels:
+              "application/json": "Empty"
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": true
+              "method.response.header.Access-Control-Allow-Methods": true
+              "method.response.header.Access-Control-Allow-Origin": true
+            StatusCode: "200"
+
+    notificationgetGetMethod:
+      Type: "AWS::ApiGateway::Method"
+      Properties:
+        RestApiId: !Ref notificationgetApiGateway
+        ResourceId: !GetAtt notificationgetApiGateway.RootResourceId
+        AuthorizationType: NONE
+        HttpMethod: GET
+        ApiKeyRequired: false
+        RequestParameters: {}
+        Integration:
+          CacheNamespace: !GetAtt notificationgetApiGateway.RootResourceId
+          ContentHandling: "CONVERT_TO_TEXT"
+          IntegrationHttpMethod: POST
+          PassthroughBehavior: "WHEN_NO_MATCH"
+          Type: "AWS_PROXY"
+          Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ShowInvitesCloudLambdaFunction.Arn}/invocations"
+          IntegrationResponses:
+            - 
+              ResponseParameters:
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,GET,POST'"
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              StatusCode: "200"
+        MethodResponses:
+          - 
+            ResponseModels: 
+              "application/json": "Empty"
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": true
+              "method.response.header.Access-Control-Allow-Methods": true
+              "method.response.header.Access-Control-Allow-Origin": true
+            StatusCode: "200" 
+  
+
+    notificationgetApiDeployment:
+      Type: AWS::ApiGateway::Deployment
+      DependsOn:
+        - notificationgetGetMethod
+      Properties:
+        RestApiId: !Ref notificationgetApiGateway
+
+
+    notificationgetApiStage:
+      Type: AWS::ApiGateway::Stage
+      Properties:
+        RestApiId: !Ref notificationgetApiGateway
+        DeploymentId: !Ref notificationgetApiDeployment
+        StageName: notificationget
+        Description: Production Stage
+    
+    deleteInvitationLambdaFunction:
+        Type: "AWS::Lambda::Function"
+        Properties:
+            Description: ""
+            FunctionName: "deleteInvitationCloud"
+            Handler: "index.lambda_handler"
+            Architectures: 
+              - "x86_64"
+            MemorySize: 128
+            Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
+            Runtime: "python3.10"
+            Timeout: 3
+            TracingConfig: 
+                Mode: "PassThrough"
+            EphemeralStorage: 
+                Size: 512
+            Code:
+                ZipFile: !Sub |
+                    import json
+                    import boto3
+
+                    sqs = boto3.client('sqs', region_name='us-east-1')
+
+                    def lambda_handler(event, context):
+                        print(event['body'])
+                        request_body = json.loads(event['body'])
+                        receipt_handle = request_body['receiptHandle']
+                        print(receipt_handle)
+
+                        try:
+                            response = sqs.delete_message(
+                                QueueUrl="https://sqs.${AWS::Region}.amazonaws.com/${AWS::AccountId}/${SQSQueue.QueueName}",
+                                ReceiptHandle=receipt_handle
+                            )
+
+                            print('Deletion successful:', response)
+                            return {
+                                'statusCode': 200,
+                                'body': json.dumps(response),
+                                'headers': {
+                                    'Access-Control-Allow-Origin': '*',  # You may restrict this to specific domains
+                                    'Access-Control-Allow-Headers': 'Content-Type',
+                                    'Access-Control-Allow-Methods': 'POST',
+                                },
+                            }
+                        except Exception as e:
+                            print('Failed to delete invitation:', e)
+                            return {
+                                'statusCode': 500,
+                                'body': json.dumps(e),
+                                'headers': {
+                                    'Access-Control-Allow-Origin': '*',  # You may restrict this to specific domains
+                                    'Access-Control-Allow-Headers': 'Content-Type',
+                                    'Access-Control-Allow-Methods': 'POST',
+                                },
+                            }
+
+
+    notificationpostApiGateway:
+      Type: AWS::ApiGateway::RestApi
+      Properties:
+        Name: notificationpost
+        Description: "notificationpost users"
+        EndpointConfiguration: 
+          Types: 
+            - "REGIONAL"
+
+    deleteInvitationLambdaFunctionPermission:
+      Type: "AWS::Lambda::Permission"
+      Properties:
+        FunctionName: !Ref deleteInvitationLambdaFunction
+        Action: "lambda:InvokeFunction"
+        Principal: "apigateway.amazonaws.com"
+        SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${notificationpostApiGateway}/*"
+
+
+    notificationpostOptionsMethod:
+      Type: AWS::ApiGateway::Method
+      Properties:
+        AuthorizationType: NONE
+        RestApiId: !Ref notificationpostApiGateway
+        ResourceId: !GetAtt notificationpostApiGateway.RootResourceId
+        HttpMethod: OPTIONS
+        ApiKeyRequired: false
+        RequestParameters: {}
+        Integration:
+          CacheNamespace: !GetAtt notificationpostApiGateway.RootResourceId
+          IntegrationResponses:
+            - 
+              
+              ResponseParameters:
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,POST'"
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              StatusCode: 200
+              ResponseTemplates:
+                "application/json": ""
+          PassthroughBehavior: WHEN_NO_MATCH
+          RequestTemplates:
+            "application/json": '{"statusCode": 200}'
+          Type: MOCK
+        MethodResponses:
+          - 
+            ResponseModels:
+              "application/json": "Empty"
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": true
+              "method.response.header.Access-Control-Allow-Methods": true
+              "method.response.header.Access-Control-Allow-Origin": true
+            StatusCode: "200"
+
+
+    notificationpostPostMethod:
+      Type: "AWS::ApiGateway::Method"
+      Properties:
+        RestApiId: !Ref notificationpostApiGateway
+        ResourceId: !GetAtt notificationpostApiGateway.RootResourceId
+        AuthorizationType: NONE
+        HttpMethod: POST
+        ApiKeyRequired: false
+        RequestParameters: {}
+        Integration:
+          CacheNamespace: !GetAtt notificationpostApiGateway.RootResourceId
+          ContentHandling: "CONVERT_TO_TEXT"
+          IntegrationHttpMethod: POST
+          PassthroughBehavior: "WHEN_NO_MATCH"
+          Type: "AWS_PROXY"
+          Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${deleteInvitationLambdaFunction.Arn}/invocations"
+          IntegrationResponses:
+            - 
+              ResponseParameters:
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,GET,POST'"
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              StatusCode: "200"
+        MethodResponses:
+          - 
+            ResponseModels: 
+              "application/json": "Empty"
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": true
+              "method.response.header.Access-Control-Allow-Methods": true
+              "method.response.header.Access-Control-Allow-Origin": true
+            StatusCode: "200"
+
+    notificationpostApiDeployment:
+      Type: AWS::ApiGateway::Deployment
+      DependsOn:
+        - notificationpostPostMethod
+      Properties:
+        RestApiId: !Ref notificationpostApiGateway
+
+
+    notificationpostApiStage:
+      Type: AWS::ApiGateway::Stage
+      Properties:
+        RestApiId: !Ref notificationpostApiGateway
+        DeploymentId: !Ref notificationpostApiDeployment
+        StageName: notificationpost
+        Description: Production Stage
+
+    StoreUserCloudLambdaFunction:
+        Type: "AWS::Lambda::Function"
+        Properties:
+            Description: "Store User Cloud Lambda Function"
+            FunctionName: "storeUserCloud"
+            Handler: "index.lambda_handler"
+            MemorySize: 128
+            Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
+            Runtime: "python3.10"
+            Timeout: 3
+            TracingConfig:
+                Mode: "PassThrough"
+            Code:
+                ZipFile: |
+                    import boto3
+                    import json
+                    import uuid
+                    import hashlib
+
+                    dynamodb = boto3.resource('dynamodb')
+                    table_name = 'usersCloud'
+
+                    #Code to register user and store data in dynamoDB
+                    def lambda_handler(event, context):
+                        try:
+                            # Get user details from the event (e.g., email, username, password)
+                            data = json.loads(event['body'])
+                            email = data['email']
+                            username = data['username']
+                            password = data['password']
+
+                            # Check if the user already exists in the database
+                            storeTable = dynamodb.Table(table_name)
+                            response = storeTable.scan(FilterExpression=boto3.dynamodb.conditions.Attr('email').eq(email))
+                            if response['Items']:
+                                return {
+                                    'statusCode': 409,
+                                    'body': 'User with this email already exists.',
+                                    'headers': {
+                                        'Access-Control-Allow-Origin': '*',  # You may restrict this to specific domains
+                                        'Access-Control-Allow-Headers': 'Content-Type',
+                                        'Access-Control-Allow-Methods': 'POST',
+                                    },
+                                }
+
+                            # Generate a unique user ID (e.g., using UUID)
+                            user_id = str(uuid.uuid4())
+
+                            # Hash the password using SHA-256
+                            hashed_password = hashlib.sha256(password.encode()).hexdigest()
+
+                            # Store user details in DynamoDB
+                            storeTable.put_item(Item={
+                                'user_id': user_id,
+                                'email': email,
+                                'username': username,
+                                'password': hashed_password
+                            })
+
+                            # Return success response
+                            return {
+                                'statusCode': 200,
+                                'body': json.dumps({'message': 'User registered successfully!', 'user_id': user_id}),
+                                'headers': {
+                                    'Access-Control-Allow-Origin': '*',  # You may restrict this to specific domains
+                                    'Access-Control-Allow-Headers': 'Content-Type',
+                                    'Access-Control-Allow-Methods': 'POST',
+                                },
+                            }
+
+                        except Exception as e:
+                            # Return error response if any exception occurs
+                            return {
+                                'statusCode': 500,
+                                'body': str(e),
+                                'headers': {
+                                    'Access-Control-Allow-Origin': '*',  # You may restrict this to specific domains
+                                    'Access-Control-Allow-Headers': 'Content-Type',
+                                    'Access-Control-Allow-Methods': 'POST',
+                                },
+                            }
+
+    storeApiGateway:
+      Type: AWS::ApiGateway::RestApi
+      Properties:
+        Name: store
+        Description: "store users"
+        EndpointConfiguration: 
+          Types: 
+            - "REGIONAL"
+
+    StoreUserCloudLambdaFunctionPermission:
+      Type: "AWS::Lambda::Permission"
+      Properties:
+        FunctionName: !Ref StoreUserCloudLambdaFunction
+        Action: "lambda:InvokeFunction"
+        Principal: "apigateway.amazonaws.com"
+        SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${storeApiGateway}/*"
+
+
+    storeOptionsMethod:
+      Type: AWS::ApiGateway::Method
+      Properties:
+        AuthorizationType: NONE
+        RestApiId: !Ref storeApiGateway
+        ResourceId: !GetAtt storeApiGateway.RootResourceId
+        HttpMethod: OPTIONS
+        ApiKeyRequired: false
+        RequestParameters: {}
+        Integration:
+          CacheNamespace: !GetAtt storeApiGateway.RootResourceId
+          IntegrationResponses:
+            - 
+              
+              ResponseParameters:
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,POST'"
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              StatusCode: 200
+              ResponseTemplates:
+                "application/json": ""
+          PassthroughBehavior: WHEN_NO_MATCH
+          RequestTemplates:
+            "application/json": '{"statusCode": 200}'
+          Type: MOCK
+        MethodResponses:
+          - 
+            ResponseModels:
+              "application/json": "Empty"
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": true
+              "method.response.header.Access-Control-Allow-Methods": true
+              "method.response.header.Access-Control-Allow-Origin": true
+            StatusCode: "200"
+            
+
+    storePostMethod:
+      Type: "AWS::ApiGateway::Method"
+      Properties:
+        RestApiId: !Ref storeApiGateway
+        ResourceId: !GetAtt storeApiGateway.RootResourceId
+        AuthorizationType: NONE
+        HttpMethod: POST
+        ApiKeyRequired: false
+        RequestParameters: {}
+        Integration:
+          CacheNamespace: !GetAtt storeApiGateway.RootResourceId
+          ContentHandling: "CONVERT_TO_TEXT"
+          IntegrationHttpMethod: POST
+          PassthroughBehavior: "WHEN_NO_MATCH"
+          Type: "AWS_PROXY"
+          Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${StoreUserCloudLambdaFunction.Arn}/invocations"
+          IntegrationResponses:
+            - 
+              ResponseParameters:
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,POST'"
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              StatusCode: "200"
+        MethodResponses:
+          - 
+            ResponseModels: 
+              "application/json": "Empty"
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": true
+              "method.response.header.Access-Control-Allow-Methods": true
+              "method.response.header.Access-Control-Allow-Origin": true
+            StatusCode: "200"
+
+    storeApiDeployment:
+      Type: AWS::ApiGateway::Deployment
+      DependsOn:
+        - storePostMethod
+      Properties:
+        RestApiId: !Ref storeApiGateway
+
+
+    storeApiStage:
+      Type: AWS::ApiGateway::Stage
+      Properties:
+        RestApiId: !Ref storeApiGateway
+        DeploymentId: !Ref storeApiDeployment
+        StageName: store
+        Description: Production Stage
+
+    StoreImageCloudLambdaFunction:
+        Type: "AWS::Lambda::Function"
+        Properties:
+            Description: "Store Image Cloud Lambda Function"
+            FunctionName: "storeImageCloud"
+            Handler: "index.lambda_handler"
+            MemorySize: 128
+            Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
+            Runtime: "python3.10"
+            Timeout: 3
+            TracingConfig:
+                Mode: "PassThrough"
+            Code:
+                ZipFile: |
+                    import json
+                    import boto3
+
+                    dynamodb = boto3.resource('dynamodb', region_name='us-east-1')
+                    table_name = 'imageCloud'
+                    storeImage = dynamodb.Table(table_name)
+
+                    def lambda_handler(event, context):
+                        response = store_group(json.loads(event['body']))
+                        return response
+
+                    def store_group(request_body):
+                        try:
+                            storeImage.put_item(Item=request_body)
+                            body = {
+                                'Operation': 'Store',
+                                'Message': 'Success',
+                                'Item': request_body
+                            }
+                            return build_response(200, body)
+                        except Exception as e:
+                            print(e)
+                            return build_response(500, {'Message': 'Error storing team data.'})
+
+                    def build_response(status_code, body):
+                        return {
+                            'statusCode': status_code,
+                            'body': json.dumps(body),
+                            'headers': {
+                                'Access-Control-Allow-Origin': '*',  # You may restrict this to specific domains
+                                'Access-Control-Allow-Headers': 'Content-Type',
+                                'Access-Control-Allow-Methods': 'POST',
+                            },
+                        }
+
+    storeimageApiGateway:
+      Type: AWS::ApiGateway::RestApi
+      Properties:
+        Name: storeimage
+        Description: "storeimage users"
+        EndpointConfiguration: 
+          Types: 
+            - "REGIONAL"
+
+    StoreImageCloudLambdaFunctionPermission:
+      Type: "AWS::Lambda::Permission"
+      Properties:
+        FunctionName: !Ref StoreImageCloudLambdaFunction
+        Action: "lambda:InvokeFunction"
+        Principal: "apigateway.amazonaws.com"
+        SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${storeimageApiGateway}/*"
+
+
+    storeimageOptionsMethod:
+      Type: AWS::ApiGateway::Method
+      Properties:
+        AuthorizationType: NONE
+        RestApiId: !Ref storeimageApiGateway
+        ResourceId: !GetAtt storeimageApiGateway.RootResourceId
+        HttpMethod: OPTIONS
+        ApiKeyRequired: false
+        RequestParameters: {}
+        Integration:
+          CacheNamespace: !GetAtt storeimageApiGateway.RootResourceId
+          IntegrationResponses:
+            - 
+              
+              ResponseParameters:
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,POST'"
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              StatusCode: 200
+              ResponseTemplates:
+                "application/json": ""
+          PassthroughBehavior: WHEN_NO_MATCH
+          RequestTemplates:
+            "application/json": '{"statusCode": 200}'
+          Type: MOCK
+        MethodResponses:
+          - 
+            ResponseModels:
+              "application/json": "Empty"
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": true
+              "method.response.header.Access-Control-Allow-Methods": true
+              "method.response.header.Access-Control-Allow-Origin": true
+            StatusCode: "200"
+            
+
+    storeimagePostMethod:
+      Type: "AWS::ApiGateway::Method"
+      Properties:
+        RestApiId: !Ref storeimageApiGateway
+        ResourceId: !GetAtt storeimageApiGateway.RootResourceId
+        AuthorizationType: NONE
+        HttpMethod: POST
+        ApiKeyRequired: false
+        RequestParameters: {}
+        Integration:
+          CacheNamespace: !GetAtt storeimageApiGateway.RootResourceId
+          ContentHandling: "CONVERT_TO_TEXT"
+          IntegrationHttpMethod: POST
+          PassthroughBehavior: "WHEN_NO_MATCH"
+          Type: "AWS_PROXY"
+          Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${StoreImageCloudLambdaFunction.Arn}/invocations"
+          IntegrationResponses:
+            - 
+              ResponseParameters:
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,POST'"
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              StatusCode: "200"
+        MethodResponses:
+          - 
+            ResponseModels: 
+              "application/json": "Empty"
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": true
+              "method.response.header.Access-Control-Allow-Methods": true
+              "method.response.header.Access-Control-Allow-Origin": true
+            StatusCode: "200"
+
+    storeimageApiDeployment:
+      Type: AWS::ApiGateway::Deployment
+      DependsOn:
+        - storeimagePostMethod
+      Properties:
+        RestApiId: !Ref storeimageApiGateway
+
+
+    storeimageApiStage:
+      Type: AWS::ApiGateway::Stage
+      Properties:
+        RestApiId: !Ref storeimageApiGateway
+        DeploymentId: !Ref storeimageApiDeployment
+        StageName: storeimage
+        Description: Production Stage
+
+    UpdateGroupCloudLambdaFunction:
+        Type: "AWS::Lambda::Function"
+        Properties:
+            Description: "Update Group Cloud Lambda Function"
+            FunctionName: "updateGroupCloud"
+            Handler: "index.lambda_handler"
+            MemorySize: 128
+            Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
+            Runtime: "python3.10"
+            Timeout: 3
+            TracingConfig:
+                Mode: "PassThrough"
+            Code:
+                ZipFile: |
+                    import json
+                    import boto3
+
+                    dynamodb_table = 'groupsCloud'
+                    dynamodb = boto3.resource('dynamodb', region_name='us-east-1')
+                    updateGroup = boto3.client('dynamodb')
+
+
+                    def lambda_handler(event, context):
+                        print(json.loads(event['body']))
+                        print(json.loads(event['body'])['group_id'])
+                        print(json.loads(event['body'])['new_member'])
+                        response = update_team(json.loads(event['body']))
+                        return response
+
+
+                    def update_team(request_body):
+                        try:
+                            t_id = request_body['group_id']
+                            response = updateGroup.get_item(TableName=dynamodb_table, Key={'group_id': {'N': str(t_id)}})
+                            item = response.get('Item')
+
+                            if item:
+                                existing_users = item.get('group_members', {'L': []})['L']
+                                updated_users = existing_users + [{'S': request_body['new_member']}]
+
+                                updateGroup.update_item(
+                                    TableName=dynamodb_table,
+                                    Key={'group_id': {'N': str(t_id)}},
+                                    UpdateExpression='SET group_members = :updatedUsers',
+                                    ExpressionAttributeValues={':updatedUsers': {'L': updated_users}}
+                                )
+
+                            print('New user added to the team successfully.')
+
+                            response_body = {
+                                'message': 'New user added to the team successfully.',
+                                'statusCode': 200
+                            }
+
+                        except Exception as e:
+                            print('Error adding new user to the team:', e)
+                            response_body = {
+                                'message': 'Error adding new user to the team.',
+                                'statusCode': 500
+                            }
+
+                        return {
+                            'statusCode': response_body['statusCode'],
+                            'body': json.dumps(response_body),
+                            'headers': {
+                                'Access-Control-Allow-Origin': '*',  # You may restrict this to specific domains
+                                'Access-Control-Allow-Headers': 'Content-Type',
+                                'Access-Control-Allow-Methods': 'POST',
+                            },
+                        }
+
+    updateApiGateway:
+      Type: AWS::ApiGateway::RestApi
+      Properties:
+        Name: update
+        Description: "Update groups"
+        EndpointConfiguration: 
+          Types: 
+            - "REGIONAL"
+
+    UpdateGroupCloudLambdaFunctionPermission:
+      Type: "AWS::Lambda::Permission"
+      Properties:
+        FunctionName: !Ref UpdateGroupCloudLambdaFunction
+        Action: "lambda:InvokeFunction"
+        Principal: "apigateway.amazonaws.com"
+        SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${updateApiGateway}/*"
+
+
+    updateOptionsMethod:
+      Type: AWS::ApiGateway::Method
+      Properties:
+        AuthorizationType: NONE
+        RestApiId: !Ref updateApiGateway
+        ResourceId: !GetAtt updateApiGateway.RootResourceId
+        HttpMethod: OPTIONS
+        ApiKeyRequired: false
+        RequestParameters: {}
+        Integration:
+          CacheNamespace: !GetAtt updateApiGateway.RootResourceId
+          IntegrationResponses:
+            - 
+              
+              ResponseParameters:
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,POST'"
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              StatusCode: 200
+              ResponseTemplates:
+                "application/json": ""
+          PassthroughBehavior: WHEN_NO_MATCH
+          RequestTemplates:
+            "application/json": '{"statusCode": 200}'
+          Type: MOCK
+        MethodResponses:
+          - 
+            ResponseModels:
+              "application/json": "Empty"
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": true
+              "method.response.header.Access-Control-Allow-Methods": true
+              "method.response.header.Access-Control-Allow-Origin": true
+            StatusCode: "200"
+            
+
+    updatePostMethod:
+      Type: "AWS::ApiGateway::Method"
+      Properties:
+        RestApiId: !Ref updateApiGateway
+        ResourceId: !GetAtt updateApiGateway.RootResourceId
+        AuthorizationType: NONE
+        HttpMethod: POST
+        ApiKeyRequired: false
+        RequestParameters: {}
+        Integration:
+          CacheNamespace: !GetAtt updateApiGateway.RootResourceId
+          ContentHandling: "CONVERT_TO_TEXT"
+          IntegrationHttpMethod: POST
+          PassthroughBehavior: "WHEN_NO_MATCH"
+          Type: "AWS_PROXY"
+          Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UpdateGroupCloudLambdaFunction.Arn}/invocations"
+          IntegrationResponses:
+            - 
+              ResponseParameters:
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,POST'"
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              StatusCode: "200"
+        MethodResponses:
+          - 
+            ResponseModels: 
+              "application/json": "Empty"
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": true
+              "method.response.header.Access-Control-Allow-Methods": true
+              "method.response.header.Access-Control-Allow-Origin": true
+            StatusCode: "200"
+
+    updateApiDeployment:
+      Type: AWS::ApiGateway::Deployment
+      DependsOn:
+        - updatePostMethod
+      Properties:
+        RestApiId: !Ref updateApiGateway
+
+
+    updateApiStage:
+      Type: AWS::ApiGateway::Stage
+      Properties:
+        RestApiId: !Ref updateApiGateway
+        DeploymentId: !Ref updateApiDeployment
+        StageName: update
+        Description: Production Stage
+
+    UpdateUserCloudLambdaFunction:
+        Type: "AWS::Lambda::Function"
+        Properties:
+            Description: "Update User Cloud Lambda Function"
+            FunctionName: "updateUserCloud"
+            Handler: "index.lambda_handler"
+            MemorySize: 128
+            Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
+            Runtime: "python3.10"
+            Timeout: 3
+            TracingConfig:
+                Mode: "PassThrough"
+            Code:
+                ZipFile: |
+                    import json
+                    import boto3
+
+                    dynamodb_table = 'usersCloud'
+                    dynamodb = boto3.resource('dynamodb', region_name='us-east-1')
+                    updateUser = boto3.client('dynamodb')
+
+                    def lambda_handler(event, context):
+                        print(json.loads(event['body']))
+                        print(json.loads(event['body'])['uid'])
+                        print(json.loads(event['body'])['group_id'])
+                        print(json.loads(event['body'])['group_name'])
+                        response = update_user(json.loads(event['body']))
+                        return response
+
+                    def update_user(request_body):
+                        try:
+                            user_id = request_body['uid']
+                            response = updateUser.get_item(TableName=dynamodb_table, Key={'user_id': {'S': user_id}})
+                            item = response.get('Item')
+
+                            if item:
+                                group_name = request_body['group_name']
+                                group_id = request_body['group_id']
+
+                                updateUser.update_item(
+                                    TableName=dynamodb_table,
+                                    Key={'user_id': {'S': user_id}},
+                                    UpdateExpression='SET group_name = :group_name, group_id = :group_id',
+                                    ExpressionAttributeValues={
+                                        ':group_name': {'S': group_name},
+                                        ':group_id': {'N': str(group_id)}
+                                    }
+                                )
+                                print('User information updated successfully.')
+                                response_body = {
+                                    'message': 'User information updated successfully.',
+                                    'statusCode': 200
+                                }
+                            else:
+                                print('User not found in the database.')
+                                response_body = {
+                                    'message': 'User not found in the database.',
+                                    'statusCode': 404
+                                }
+
+                        except Exception as e:
+                            print('Error updating User information:', e)
+                            response_body = {
+                                'message': 'Error updating team information.',
+                                'statusCode': 500
+                            }
+                        return {
+                            'statusCode': response_body['statusCode'],
+                            'headers': {
+                                'Content-Type': 'application/json'
+                            },
+                            'body': json.dumps(response_body),
+                            'headers': {
+                                'Access-Control-Allow-Origin': '*',  # You may restrict this to specific domains
+                                'Access-Control-Allow-Headers': 'Content-Type',
+                                'Access-Control-Allow-Methods': 'POST',
+                            },
+                        }
+  
+    updateUserApiGateway:
+      Type: AWS::ApiGateway::RestApi
+      Properties:
+        Name: UpdateUser
+        Description: "Update Users"
+        EndpointConfiguration: 
+          Types: 
+            - "REGIONAL"
+
+    UpdateUserCloudLambdaFunctionPermission:
+      Type: "AWS::Lambda::Permission"
+      Properties:
+        FunctionName: !Ref UpdateUserCloudLambdaFunction
+        Action: "lambda:InvokeFunction"
+        Principal: "apigateway.amazonaws.com"
+        SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${updateUserApiGateway}/*"
+
+
+    updateUserOptionsMethod:
+      Type: AWS::ApiGateway::Method
+      Properties:
+        AuthorizationType: NONE
+        RestApiId: !Ref updateUserApiGateway
+        ResourceId: !GetAtt updateUserApiGateway.RootResourceId
+        HttpMethod: OPTIONS
+        ApiKeyRequired: false
+        RequestParameters: {}
+        Integration:
+          CacheNamespace: !GetAtt updateUserApiGateway.RootResourceId
+          IntegrationResponses:
+            - 
+              
+              ResponseParameters:
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,POST'"
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              StatusCode: 200
+              ResponseTemplates:
+                "application/json": ""
+          PassthroughBehavior: WHEN_NO_MATCH
+          RequestTemplates:
+            "application/json": '{"statusCode": 200}'
+          Type: MOCK
+        MethodResponses:
+          - 
+            ResponseModels:
+              "application/json": "Empty"
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": true
+              "method.response.header.Access-Control-Allow-Methods": true
+              "method.response.header.Access-Control-Allow-Origin": true
+            StatusCode: "200"
+            
+
+    updateUserPostMethod:
+      Type: "AWS::ApiGateway::Method"
+      Properties:
+        RestApiId: !Ref updateUserApiGateway
+        ResourceId: !GetAtt updateUserApiGateway.RootResourceId
+        AuthorizationType: NONE
+        HttpMethod: POST
+        ApiKeyRequired: false
+        RequestParameters: {}
+        Integration:
+          CacheNamespace: !GetAtt updateUserApiGateway.RootResourceId
+          ContentHandling: "CONVERT_TO_TEXT"
+          IntegrationHttpMethod: POST
+          PassthroughBehavior: "WHEN_NO_MATCH"
+          Type: "AWS_PROXY"
+          Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UpdateUserCloudLambdaFunction.Arn}/invocations"
+          IntegrationResponses:
+            - 
+              ResponseParameters:
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,POST'"
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              StatusCode: "200"
+        MethodResponses:
+          - 
+            ResponseModels: 
+              "application/json": "Empty"
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": true
+              "method.response.header.Access-Control-Allow-Methods": true
+              "method.response.header.Access-Control-Allow-Origin": true
+            StatusCode: "200"
+
+    updateuserApiDeployment:
+      Type: AWS::ApiGateway::Deployment
+      DependsOn:
+        - updateUserPostMethod
+      Properties:
+        RestApiId: !Ref updateUserApiGateway
+
+
+    updateuserApiStage:
+      Type: AWS::ApiGateway::Stage
+      Properties:
+        RestApiId: !Ref updateUserApiGateway
+        DeploymentId: !Ref updateuserApiDeployment
+        StageName: updateuser
+        Description: Production Stage
+
+    DeleteGroupCloudLambdaFunction:
+        Type: "AWS::Lambda::Function"
+        Properties:
+            Description: "Delete Group Cloud Lambda Function"
+            FunctionName: "deleteGroupCloud"
+            Handler: "index.lambda_handler"
+            MemorySize: 128
+            Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
+            Runtime: "python3.10"
+            Timeout: 3
+            TracingConfig:
+                Mode: "PassThrough"
+            Code:
+                ZipFile: |
+                    import json
+                    import boto3
+
+                    dynamodb = boto3.resource('dynamodb')
+                    s3_client = boto3.client('s3')
+                    table_name = 'groupsCloud'
+
+                    def delete_item(groupid):
+                        table = dynamodb.Table(table_name)
+                        response = table.delete_item(
+                            Key={
+                                'group_id': groupid
+                            }
+                        )
+                        return response
+
+                    def lambda_handler(event, context):
+                        print(event['body'])
+                        data = json.loads(event["body"])
+                        print(data)
+                        groupid = data["id"]
+                        
+                        
+                        for image in data["images"]:
+                            s3_client.delete_object(Bucket='photostoragedata1', Key='uploads/'+image["image_id"])
+
+                        try:
+                            # Delete the team with the given group ID
+                            delete_response = delete_item(groupid)
+                            print(delete_response)
+
+                            return {
+                                'statusCode': 200,
+                                'body': json.dumps({"message": "Grou deleted successfully"}),
+                                'headers': {
+                                    'Access-Control-Allow-Origin': '*',  # You may restrict this to specific domains
+                                    'Access-Control-Allow-Headers': 'Content-Type',
+                                    'Access-Control-Allow-Methods': 'POST',
+                                },
+                            }
+                        except Exception as e:
+                            return  {
+                                'statusCode': 500,
+                                'body': json.dumps({"error": str(e)}),
+                                'headers': {
+                                    'Access-Control-Allow-Origin': '*',  # You may restrict this to specific domains
+                                    'Access-Control-Allow-Headers': 'Content-Type',
+                                    'Access-Control-Allow-Methods': 'POST',
+                                },
+                            }
+
+
+    deleteGroupApiGateway:
+      Type: AWS::ApiGateway::RestApi
+      Properties:
+        Name: deletegroup
+        Description: "delete group"
+        EndpointConfiguration: 
+          Types: 
+            - "REGIONAL"
+
+    DeleteGroupCloudLambdaFunctionPermission:
+      Type: "AWS::Lambda::Permission"
+      Properties:
+        FunctionName: !Ref DeleteGroupCloudLambdaFunction
+        Action: "lambda:InvokeFunction"
+        Principal: "apigateway.amazonaws.com"
+        SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${deleteGroupApiGateway}/*"
+
+
+    deletegroupOptionsMethod:
+      Type: AWS::ApiGateway::Method
+      Properties:
+        AuthorizationType: NONE
+        RestApiId: !Ref deleteGroupApiGateway
+        ResourceId: !GetAtt deleteGroupApiGateway.RootResourceId
+        HttpMethod: OPTIONS
+        ApiKeyRequired: false
+        RequestParameters: {}
+        Integration:
+          CacheNamespace: !GetAtt deleteGroupApiGateway.RootResourceId
+          IntegrationResponses:
+            - 
+              
+              ResponseParameters:
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,POST'"
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              StatusCode: 200
+              ResponseTemplates:
+                "application/json": ""
+          PassthroughBehavior: WHEN_NO_MATCH
+          RequestTemplates:
+            "application/json": '{"statusCode": 200}'
+          Type: MOCK
+        MethodResponses:
+          - 
+            ResponseModels:
+              "application/json": "Empty"
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": true
+              "method.response.header.Access-Control-Allow-Methods": true
+              "method.response.header.Access-Control-Allow-Origin": true
+            StatusCode: "200"
+            
+
+    deletegroupPostMethod:
+      Type: "AWS::ApiGateway::Method"
+      Properties:
+        RestApiId: !Ref deleteGroupApiGateway
+        ResourceId: !GetAtt deleteGroupApiGateway.RootResourceId
+        AuthorizationType: NONE
+        HttpMethod: POST
+        ApiKeyRequired: false
+        RequestParameters: {}
+        Integration:
+          CacheNamespace: !GetAtt deleteGroupApiGateway.RootResourceId
+          ContentHandling: "CONVERT_TO_TEXT"
+          IntegrationHttpMethod: POST
+          PassthroughBehavior: "WHEN_NO_MATCH"
+          Type: "AWS_PROXY"
+          Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DeleteGroupCloudLambdaFunction.Arn}/invocations"
+          IntegrationResponses:
+            - 
+              ResponseParameters:
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,POST'"
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              StatusCode: "200"
+        MethodResponses:
+          - 
+            ResponseModels: 
+              "application/json": "Empty"
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": true
+              "method.response.header.Access-Control-Allow-Methods": true
+              "method.response.header.Access-Control-Allow-Origin": true
+            StatusCode: "200"
+
+    deletegroupApiDeployment:
+      Type: AWS::ApiGateway::Deployment
+      DependsOn:
+        - deletegroupPostMethod
+      Properties:
+        RestApiId: !Ref deleteGroupApiGateway
+
+
+    deletegroupApiStage:
+      Type: AWS::ApiGateway::Stage
+      Properties:
+        RestApiId: !Ref deleteGroupApiGateway
+        DeploymentId: !Ref deletegroupApiDeployment
+        StageName: deletegroup
+        Description: Production Stage
+
+    DeleteGroupMemberCloudLambdaFunction:
+        Type: "AWS::Lambda::Function"
+        Properties:
+            Description: "Delete Group Member Cloud Lambda Function"
+            FunctionName: "deleteGroupMemberCloud"
+            Handler: "index.lambda_handler"
+            MemorySize: 128
+            Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
+            Runtime: "python3.10"
+            Timeout: 3
+            TracingConfig:
+                Mode: "PassThrough"
+            Code:
+                ZipFile: |
+                    import json
+                    import boto3
+
+                    dynamodb = boto3.resource('dynamodb')
+                    table_name = 'usersCloud'
+
+                    def lambda_handler(event, context):
+                        request_body = json.loads(event['body'])
+                        user_email = request_body['user_email']
+                        print(user_email)
+
+                        try:
+                            response = delete_team_user(request_body)
+                            return {
+                                'statusCode': 200,
+                                'headers': {
+                                        'Access-Control-Allow-Origin': '*',  # You may restrict this to specific domains
+                                        'Access-Control-Allow-Headers': 'Content-Type',
+                                        'Access-Control-Allow-Methods': 'POST',
+                                    },
+                                'body': json.dumps({'message': response})
+                            }
+                        except Exception as e:
+                            return {
+                                'statusCode': 500,
+                                'headers': {
+                                        'Access-Control-Allow-Origin': '*',  # You may restrict this to specific domains
+                                        'Access-Control-Allow-Headers': 'Content-Type',
+                                        'Access-Control-Allow-Methods': 'POST',
+                                    },
+                                'body': json.dumps({'error': str(e)})
+                            }
+
+                    def delete_team_user(request_body):
+                        table = dynamodb.Table(table_name)
+                        
+                        # Perform a scan to find the user with the given email
+                        response = table.scan(
+                            FilterExpression='email = :userEmail',
+                            ExpressionAttributeValues={':userEmail': request_body['user_email']}
+                        )
+                        
+                        print(response)
+                        
+                        items = response['Items']
+                        
+                        print(items)
+                        if len(items) > 0:
+                            user_id = items[0]['user_id']
+                            
+                            # Update the user's group_name and group_id
+                            table.update_item(
+                                Key={'user_id': user_id},
+                                UpdateExpression='SET group_name = :updateTeamName, group_id = :updateTeamID',
+                                ExpressionAttributeValues={
+                                    ':updateTeamName': request_body['group_name'],
+                                    ':updateTeamID': request_body['group_id'],
+                                }
+                            )
+                            
+                            return 'Group member\'s group id and group name removed successfully by delete team button'
+                        else:
+                            raise Exception('User with the given email not found')
+
+
+    deleteGroupMemberApiGateway:
+      Type: AWS::ApiGateway::RestApi
+      Properties:
+        Name: deletemember
+        Description: "delete membmer"
+        EndpointConfiguration: 
+          Types: 
+            - "REGIONAL"
+
+    DeleteGroupMemberCloudLambdaFunctionPermission:
+      Type: "AWS::Lambda::Permission"
+      Properties:
+        FunctionName: !Ref DeleteGroupMemberCloudLambdaFunction
+        Action: "lambda:InvokeFunction"
+        Principal: "apigateway.amazonaws.com"
+        SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${deleteGroupMemberApiGateway}/*"
+
+
+    deletememberOptionsMethod:
+      Type: AWS::ApiGateway::Method
+      Properties:
+        AuthorizationType: NONE
+        RestApiId: !Ref deleteGroupMemberApiGateway
+        ResourceId: !GetAtt deleteGroupMemberApiGateway.RootResourceId
+        HttpMethod: OPTIONS
+        ApiKeyRequired: false
+        RequestParameters: {}
+        Integration:
+          CacheNamespace: !GetAtt deleteGroupMemberApiGateway.RootResourceId
+          IntegrationResponses:
+            - 
+              
+              ResponseParameters:
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,POST'"
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              StatusCode: 200
+              ResponseTemplates:
+                "application/json": ""
+          PassthroughBehavior: WHEN_NO_MATCH
+          RequestTemplates:
+            "application/json": '{"statusCode": 200}'
+          Type: MOCK
+        MethodResponses:
+          - 
+            ResponseModels:
+              "application/json": "Empty"
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": true
+              "method.response.header.Access-Control-Allow-Methods": true
+              "method.response.header.Access-Control-Allow-Origin": true
+            StatusCode: "200"
+            
+
+    deletememberPostMethod:
+      Type: "AWS::ApiGateway::Method"
+      Properties:
+        RestApiId: !Ref deleteGroupMemberApiGateway
+        ResourceId: !GetAtt deleteGroupMemberApiGateway.RootResourceId
+        AuthorizationType: NONE
+        HttpMethod: POST
+        ApiKeyRequired: false
+        RequestParameters: {}
+        Integration:
+          CacheNamespace: !GetAtt deleteGroupMemberApiGateway.RootResourceId
+          ContentHandling: "CONVERT_TO_TEXT"
+          IntegrationHttpMethod: POST
+          PassthroughBehavior: "WHEN_NO_MATCH"
+          Type: "AWS_PROXY"
+          Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DeleteGroupMemberCloudLambdaFunction.Arn}/invocations"
+          IntegrationResponses:
+            - 
+              ResponseParameters:
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,POST'"
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              StatusCode: "200"
+        MethodResponses:
+          - 
+            ResponseModels: 
+              "application/json": "Empty"
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": true
+              "method.response.header.Access-Control-Allow-Methods": true
+              "method.response.header.Access-Control-Allow-Origin": true
+            StatusCode: "200"
+
+    deletememberApiDeployment:
+      Type: AWS::ApiGateway::Deployment
+      DependsOn:
+        - deletememberPostMethod
+      Properties:
+        RestApiId: !Ref deleteGroupMemberApiGateway
+
+
+    deletememberApiStage:
+      Type: AWS::ApiGateway::Stage
+      Properties:
+        RestApiId: !Ref deleteGroupMemberApiGateway
+        DeploymentId: !Ref deletememberApiDeployment
+        StageName: deletemember
+        Description: Production Stage
+
+    ImageUploadLambdaFunction:
+        Type: "AWS::Lambda::Function"
+        Properties:
+            Description: "Image upload Lambda Function"
+            FunctionName: "imageupload"
+            Handler: "index.lambda_handler"
+            MemorySize: 128
+            Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
+            Runtime: "python3.10"
+            Timeout: 3
+            TracingConfig:
+                Mode: "PassThrough"
+            Code:
+                ZipFile: |
+                    import json
+                    import base64
+                    import boto3
+
+                    s3 = boto3.client('s3')
+
+                    def lambda_handler(event, context):
+                        try:
+                            print(event)
+                            request_body = json.loads(event['body'])
+                            image_file = request_body['body']
+                            file_name = request_body['name']
+                            file_type = request_body['type']
+                            
+                            print(file_name)
+                            print(file_type)
+                            
+                            image_buffer = base64.b64decode(image_file)
+
+                            # Generate a unique filename for the image
+                            image_key = f"uploads/{file_name}"  # Customize the key as per your requirements
+
+                            # Set up the parameters for S3 upload
+                            bucket_name = 'photostoragedata1'  # Replace with your actual S3 bucket name
+                            params = {
+                                'Bucket': bucket_name,
+                                'Key': image_key,
+                                'Body': image_buffer,
+                                'ContentType': file_type,  # Set the appropriate content type for your images
+                                'ContentDisposition': 'attachment',
+                            }
+
+                            # Upload the image to S3
+                            s3.put_object(**params)
+
+                            # Return a response with the URL of the uploaded image
+                            image_url = f"https://{bucket_name}.s3.amazonaws.com/{image_key}"
+                            response = {
+                                'statusCode': 200,
+                                'body': json.dumps({'imageURL': image_url}),
+                                'headers': {
+                                    'Access-Control-Allow-Origin': '*',
+                                    'Access-Control-Allow-Headers': 'Content-Type',
+                                    'Access-Control-Allow-Methods': 'POST',
+                                },
+                            }
+                            return response
+                        except Exception as e:
+                            print('Error uploading image:', e)
+                            response = {
+                                'statusCode': 500,
+                                'body': json.dumps({'message': 'Failed to upload image'}),
+                                'headers': {
+                                    'Access-Control-Allow-Origin': '*',
+                                    'Access-Control-Allow-Headers': 'Content-Type',
+                                    'Access-Control-Allow-Methods': 'POST',
+                                },
+                            }
+                            return response
+
+
+    imageUploadApiGateway:
+      Type: AWS::ApiGateway::RestApi
+      Properties:
+        Name: imageupload
+        Description: "imageupload"
+        EndpointConfiguration: 
+          Types: 
+            - "REGIONAL"
+
+    ImageUploadLambdaFunctionPermission:
+      Type: "AWS::Lambda::Permission"
+      Properties:
+        FunctionName: !Ref ImageUploadLambdaFunction
+        Action: "lambda:InvokeFunction"
+        Principal: "apigateway.amazonaws.com"
+        SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${imageUploadApiGateway}/*"
+
+
+    imageuploadOptionsMethod:
+      Type: AWS::ApiGateway::Method
+      Properties:
+        AuthorizationType: NONE
+        RestApiId: !Ref imageUploadApiGateway
+        ResourceId: !GetAtt imageUploadApiGateway.RootResourceId
+        HttpMethod: OPTIONS
+        ApiKeyRequired: false
+        RequestParameters: {}
+        Integration:
+          CacheNamespace: !GetAtt imageUploadApiGateway.RootResourceId
+          IntegrationResponses:
+            - 
+              
+              ResponseParameters:
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,POST'"
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              StatusCode: 200
+              ResponseTemplates:
+                "application/json": ""
+          PassthroughBehavior: WHEN_NO_MATCH
+          RequestTemplates:
+            "application/json": '{"statusCode": 200}'
+          Type: MOCK
+        MethodResponses:
+          - 
+            ResponseModels:
+              "application/json": "Empty"
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": true
+              "method.response.header.Access-Control-Allow-Methods": true
+              "method.response.header.Access-Control-Allow-Origin": true
+            StatusCode: "200"
+            
+
+    imageuploadPostMethod:
+      Type: "AWS::ApiGateway::Method"
+      Properties:
+        RestApiId: !Ref imageUploadApiGateway
+        ResourceId: !GetAtt imageUploadApiGateway.RootResourceId
+        AuthorizationType: NONE
+        HttpMethod: POST
+        ApiKeyRequired: false
+        RequestParameters: {}
+        Integration:
+          CacheNamespace: !GetAtt imageUploadApiGateway.RootResourceId
+          ContentHandling: "CONVERT_TO_TEXT"
+          IntegrationHttpMethod: POST
+          PassthroughBehavior: "WHEN_NO_MATCH"
+          Type: "AWS_PROXY"
+          Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ImageUploadLambdaFunction.Arn}/invocations"
+          IntegrationResponses:
+            - 
+              ResponseParameters:
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                "method.response.header.Access-Control-Allow-Methods": "'OPTIONS,POST'"
+                "method.response.header.Access-Control-Allow-Origin": "'*'"
+              StatusCode: "200"
+        MethodResponses:
+          - 
+            ResponseModels: 
+              "application/json": "Empty"
+            ResponseParameters:
+              "method.response.header.Access-Control-Allow-Headers": true
+              "method.response.header.Access-Control-Allow-Methods": true
+              "method.response.header.Access-Control-Allow-Origin": true
+            StatusCode: "200"
+
+    imageuploadApiDeployment:
+      Type: AWS::ApiGateway::Deployment
+      DependsOn:
+        - imageuploadPostMethod
+      Properties:
+        RestApiId: !Ref imageUploadApiGateway
+
+
+    imageuploadApiStage:
+      Type: AWS::ApiGateway::Stage
+      Properties:
+        RestApiId: !Ref imageUploadApiGateway
+        DeploymentId: !Ref imageuploadApiDeployment
+        StageName: imageupload
+        Description: Production Stage
+
+    SQSQueue:
+      Type: "AWS::SQS::Queue"
+      Properties:
+        DelaySeconds: "0"
+        MaximumMessageSize: "262144"
+        MessageRetentionPeriod: "345600"
+        ReceiveMessageWaitTimeSeconds: "0"
+        VisibilityTimeout: "0"
+        QueueName: "sqsCloud"
+
+    SNSTopic:
+      Type: "AWS::SNS::Topic"
+      Properties:
+        DisplayName: ""
+        TopicName: "snsCloud"
+
+    SNSTopicPolicy:
+      Type: "AWS::SNS::TopicPolicy"
+      Properties:
+        PolicyDocument:
+          Version: "2008-10-17"
+          Id: "__default_policy_ID"
+          Statement:
+            - Sid: "__default_statement_ID"
+              Effect: "Allow"
+              Principal:
+                AWS: "*"
+              Action:
+                - "SNS:GetTopicAttributes"
+                - "SNS:SetTopicAttributes"
+                - "SNS:AddPermission"
+                - "SNS:RemovePermission"
+                - "SNS:DeleteTopic"
+                - "SNS:Subscribe"
+                - "SNS:ListSubscriptionsByTopic"
+                - "SNS:Publish"
+              Resource: !Ref SNSTopic
+              Condition:
+                StringEquals:
+                  AWS:SourceOwner: !Ref AWS::AccountId
+
+        Topics:
+          - !Ref SNSTopic
+
+    SNSSubscription:
+      Type: "AWS::SNS::Subscription"
+      Properties:
+        TopicArn: !Ref SNSTopic
+        Endpoint: !GetAtt SQSQueue.Arn
+        Protocol: "sqs"
+        RawMessageDelivery: "false"
+        Region: !Ref AWS::Region
+
+    SQSQueuePolicy:
+      Type: "AWS::SQS::QueuePolicy"
+      Properties:
+        PolicyDocument:
+          Version: "2012-10-17"
+          Id: "Policy1690435345158"
+          Statement:
+            - Sid: "Stmt1690435262946"
+              Effect: "Allow"
+              Principal: "*"
+              Action: "sqs:*"
+              Resource: !GetAtt SQSQueue.Arn
+              Condition:
+                ArnEquals:
+                  aws:SourceArn: !Ref SNSTopic
+
+        Queues:
+          - !Sub "https://sqs.${AWS::Region}.amazonaws.com/${AWS::AccountId}/${SQSQueue.QueueName}"
+
+    S3Bucket:
+        DeletionPolicy: "Retain"
+        Type: "AWS::S3::Bucket"
+        Properties:
+            BucketName: "photostoragedata1"
+            BucketEncryption: 
+                ServerSideEncryptionConfiguration: 
+                  - 
+                    ServerSideEncryptionByDefault: 
+                        SSEAlgorithm: "AES256"
+                    BucketKeyEnabled: true
+            CorsConfiguration: 
+                CorsRules: 
+                  - 
+                    AllowedHeaders: 
+                      - "*"
+                    AllowedMethods: 
+                      - "PUT"
+                      - "POST"
+                      - "DELETE"
+                      - "GET"
+                      - "HEAD"
+                    AllowedOrigins: 
+                      - "*"
+            OwnershipControls: 
+                Rules: 
+                  - 
+                    ObjectOwnership: "BucketOwnerPreferred"
+            PublicAccessBlockConfiguration: 
+                BlockPublicAcls: false
+                BlockPublicPolicy: false
+                IgnorePublicAcls: false
+                RestrictPublicBuckets: false
+
+    S3BucketPolicy:
+        Type: "AWS::S3::BucketPolicy"
+        Properties:
+            Bucket: !Ref S3Bucket
+            PolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                  - Sid: "Stmt1648807205338"
+                    Effect: "Allow"
+                    Principal: "*"
+                    Action: "s3:*"
+                    Resource:
+                      - !Join [ "", ["arn:aws:s3:::", !Ref S3Bucket]]
+                      - !Join [ "", ["arn:aws:s3:::", !Ref S3Bucket, "/*"]]
+
+
+    DynamoDBTable:
+        DeletionPolicy: "Retain"
+        Type: "AWS::DynamoDB::Table"
+        Properties:
+            AttributeDefinitions: 
+              - 
+                AttributeName: "group_id"
+                AttributeType: "N"
+            TableName: "groupsCloud"
+            KeySchema: 
+              - 
+                AttributeName: "group_id"
+                KeyType: "HASH"
+            ProvisionedThroughput: 
+                ReadCapacityUnits: 1
+                WriteCapacityUnits: 1
+
+    DynamoDBTable2:
+        DeletionPolicy: "Retain"
+        Type: "AWS::DynamoDB::Table"
+        Properties:
+            AttributeDefinitions: 
+              - 
+                AttributeName: "image_id"
+                AttributeType: "S"
+            TableName: "imageCloud"
+            KeySchema: 
+              - 
+                AttributeName: "image_id"
+                KeyType: "HASH"
+            ProvisionedThroughput: 
+                ReadCapacityUnits: 1
+                WriteCapacityUnits: 1
+
+    DynamoDBTable3:
+        DeletionPolicy: "Retain"
+        Type: "AWS::DynamoDB::Table"
+        Properties:
+            AttributeDefinitions: 
+              - 
+                AttributeName: "user_id"
+                AttributeType: "S"
+            TableName: "usersCloud"
+            KeySchema: 
+              - 
+                AttributeName: "user_id"
+                KeyType: "HASH"
+            ProvisionedThroughput: 
+                ReadCapacityUnits: 1
+                WriteCapacityUnits: 1
+
+    SecretsManagerSecret:
+      Type: "AWS::SecretsManager::Secret"
+      Properties:
+          Name: "apikey"
+          SecretString: !Sub |
+              {
+                  "REACT_APP_AUTHENTICATE": "https://${authenticateApiGateway}.execute-api.${AWS::Region}.amazonaws.com/authenticate",
+                  "REACT_APP_CREATE": "https://${createApiGateway}.execute-api.${AWS::Region}.amazonaws.com/create",
+                  "REACT_APP_GETGROUP": "https://${getGroupApiGateway}.execute-api.${AWS::Region}.amazonaws.com/getgroup",
+                  "REACT_APP_GETIMAGES": "https://${getImagesApiGateway}.execute-api.${AWS::Region}.amazonaws.com/getimages",
+                  "REACT_APP_GETUSER": "https://${getUserApiGateway}.execute-api.${AWS::Region}.amazonaws.com/getuser",
+                  "REACT_APP_INVITEMEMBER": "https://${invitememberApiGateway}.execute-api.${AWS::Region}.amazonaws.com/invitemember",
+                  "REACT_APP_NOTIFICATIONGET": "https://${notificationgetApiGateway}.execute-api.${AWS::Region}.amazonaws.com/notificationget",
+                  "REACT_APP_NOTIFICATIONPOST": "https://${notificationpostApiGateway}.execute-api.${AWS::Region}.amazonaws.com/notificationpost",
+                  "REACT_APP_STORE": "https://${storeApiGateway}.execute-api.${AWS::Region}.amazonaws.com/store",
+                  "REACT_APP_STOREIMAGE": "https://${storeimageApiGateway}.execute-api.${AWS::Region}.amazonaws.com/storeimage",
+                  "REACT_APP_UPDATE": "https://${updateApiGateway}.execute-api.${AWS::Region}.amazonaws.com/update",
+                  "REACT_APP_UPDATEUSER": "https://${updateUserApiGateway}.execute-api.${AWS::Region}.amazonaws.com/updateuser",
+                  "REACT_APP_DELETEGROUP": "https://${deleteGroupApiGateway}.execute-api.${AWS::Region}.amazonaws.com/deletegroup",
+                  "REACT_APP_DELETEMEMBER": "https://${deleteGroupMemberApiGateway}.execute-api.${AWS::Region}.amazonaws.com/deletemember",
+                  "REACT_APP_IMAGEUPLOAD": "https://${imageUploadApiGateway}.execute-api.${AWS::Region}.amazonaws.com/imageupload"
+              }
+
+    SecurityGroup:
+        Type: "AWS::EC2::SecurityGroup"
+        Properties:
+            GroupDescription: "My custom security group"
+            SecurityGroupIngress:
+              - IpProtocol: "tcp"
+                FromPort: 22
+                ToPort: 22
+                CidrIp: "0.0.0.0/0"  
+
+              - IpProtocol: "tcp"
+                FromPort: 80
+                ToPort: 80
+                CidrIp: "0.0.0.0/0"
+
+              - IpProtocol: "tcp"
+                FromPort: 443
+                ToPort: 443
+                CidrIp: "0.0.0.0/0"
+
+
+    EC2Instance:
+        Type: "AWS::EC2::Instance"
+        Properties:
+            ImageId: "ami-05548f9cecf47b442"
+            InstanceType: "t2.micro"
+            KeyName: "assgn2"
+            AvailabilityZone: !Sub "${AWS::Region}e"
+            Tenancy: "default"
+            SubnetId: "subnet-0d8ad5ddcc69552a8"
+            EbsOptimized: false
+            SecurityGroupIds: 
+              - !GetAtt SecurityGroup.GroupId
+            SourceDestCheck: true
+           
+            UserData: 
+              Fn::Base64: !Sub |
+                #!/bin/bash
+                sudo yum update -y
+                sudo yum install -y git
+                sudo yum install -y nodejs
+                sudo yum install -y nginx
+                cd /usr/share/nginx/html
+                sudo git clone https://nisargs:glpat-UXqzzXsrpjS9MmaX2_Zg@git.cs.dal.ca/nisargs/cloudproject.git
+                cd cloudproject
+                secret_name="apikey"
+                secret_output=$(aws secretsmanager get-secret-value --secret-id $secret_name)
+                secret_string=$(echo $secret_output | jq -r '.SecretString')
+                echo "$secret_string" | jq -r 'to_entries[] | "\(.key)=\(.value)"' > /home/ec2-user/.env
+                sudo mv /home/ec2-user/.env /usr/share/nginx/html/cloudproject
+                sudo npm install
+                sudo npm run build
+                sudo cp -r build /usr/share/nginx/html
+                cd ..
+                sudo mv build/* .
+                sudo aws s3 cp s3://reactfrontendcode1234/nginx.conf /etc/nginx/nginx.conf
+                sudo systemctl start nginx
+                sudo systemctl enable nginx
+                sudo systemctl restart nginx
+                sudo nginx -s reload
+
+            IamInstanceProfile: "LabInstanceProfile"
+            Tags: 
+              - 
+                Key: "Name"
+                Value: "frontend"
+
+        DependsOn: SecretsManagerSecret
+
+    MyEIP:
+        Type: "AWS::EC2::EIP"
+
+    EIPAssociation:
+        Type: "AWS::EC2::EIPAssociation"
+        Properties:
+          InstanceId: !Ref EC2Instance
+          EIP: !Ref MyEIP
+
+    
+
+
+# Outputs for the project
+Outputs:
+  authenticateAPIGatewayURL:
+    Description: "API Gateway URL"
+    Value: !Sub "https://${authenticateApiGateway}.execute-api.${AWS::Region}.amazonaws.com/authenticate"
+  createAPIGatewayURL:
+    Description: "API Gateway URL"
+    Value: !Sub "https://${createApiGateway}.execute-api.${AWS::Region}.amazonaws.com/create"
+  getGroupAPIGatewayURL:
+    Description: "API Gateway URL"
+    Value: !Sub "https://${getGroupApiGateway}.execute-api.${AWS::Region}.amazonaws.com/getgroup"
+  getImagesAPIGatewayURL:
+    Description: "API Gateway URL"
+    Value: !Sub "https://${getImagesApiGateway}.execute-api.${AWS::Region}.amazonaws.com/getimages"
+  getUserAPIGatewayURL:
+    Description: "API Gateway URL"
+    Value: !Sub "https://${getUserApiGateway}.execute-api.${AWS::Region}.amazonaws.com/getuser"
+  invitememberAPIGatewayURL:
+    Description: "API Gateway URL"
+    Value: !Sub "https://${invitememberApiGateway}.execute-api.${AWS::Region}.amazonaws.com/invitemember"
+  notificationgetAPIGatewayURL:
+    Description: "API Gateway URL"
+    Value: !Sub "https://${notificationgetApiGateway}.execute-api.${AWS::Region}.amazonaws.com/notificationget"
+  notificationpostAPIGatewayURL:
+    Description: "API Gateway URL"
+    Value: !Sub "https://${notificationpostApiGateway}.execute-api.${AWS::Region}.amazonaws.com/notificationpost"
+  storeAPIGatewayURL:
+    Description: "API Gateway URL"
+    Value: !Sub "https://${storeApiGateway}.execute-api.${AWS::Region}.amazonaws.com/store"
+  storeimageAPIGatewayURL:
+    Description: "API Gateway URL"
+    Value: !Sub "https://${storeimageApiGateway}.execute-api.${AWS::Region}.amazonaws.com/storeimage"
+  updateAPIGatewayURL:
+    Description: "API Gateway URL"
+    Value: !Sub "https://${updateApiGateway}.execute-api.${AWS::Region}.amazonaws.com/update"
+  updateUserAPIGatewayURL:
+    Description: "API Gateway URL"
+    Value: !Sub "https://${updateUserApiGateway}.execute-api.${AWS::Region}.amazonaws.com/updateuser"
+  deleteGroupAPIGatewayURL:
+    Description: "API Gateway URL"
+    Value: !Sub "https://${deleteGroupApiGateway}.execute-api.${AWS::Region}.amazonaws.com/deletegroup"
+  deleteGroupAPIGatewayURL:
+    Description: "API Gateway URL"
+    Value: !Sub "https://${deleteGroupMemberApiGateway}.execute-api.${AWS::Region}.amazonaws.com/deletemember"
+  imageUploadApiGatewayURL:
+    Description: "API Gateway URL"
+    Value: !Sub "https://${imageUploadApiGateway}.execute-api.${AWS::Region}.amazonaws.com/imageupload"
+  SQSQueueUrl:
+    Description: "URL of the created SQS Queue"
+    Value: !Ref SQSQueue
+  EC2IPAddress:
+    Description: "IP address of EC2 instance"
+    Value: !Ref MyEIP
+  
